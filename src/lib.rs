@@ -15,38 +15,6 @@ pub enum Error {
     Digital,
 }
 
-/*
-
-enum DMDTestPattern {
-  PATTERN_ALT_0,
-  PATTERN_ALT_1,
-  PATTERN_STRIPE_0,
-  PATTERN_STRIPE_1
-};
-
-//Pixel/graphics writing modes
-enum DMDGraphicsMode {
-    GRAPHICS_OFF, // unconditionally off (pixel turns off)
-    GRAPHICS_ON, //unconditionally on (pixel turns on, the usual default for drawing)
-    GRAPHICS_INVERSE, // on if was going to set to off
-    GRAPHICS_OR, // add to pixels already on
-    GRAPHICS_NOR, // subtract from pixels already on, don't turn any new ones on
-    GRAPHICS_XOR, // swap on/off state of pixels
-    GRAPHICS_NOOP // No-Op, ie don't actually change anything
-};
-*/
-
-const DMD_PIXEL_LUT: [u8; 8] = [
-    0x80, //0, bit 7
-    0x40, //1, bit 6
-    0x20, //2. bit 5
-    0x10, //3, bit 4
-    0x08, //4, bit 3
-    0x04, //5, bit 2
-    0x02, //6, bit 1
-    0x01, //7, bit 0
-];
-
 pub struct P10Led<
     SPI: SpiDevice,
     PWM: SetDutyCycle,
@@ -92,7 +60,7 @@ impl<
     }
 
     const fn pixel_to_bitmask(x: usize) -> u8 {
-        DMD_PIXEL_LUT[x & 0x07]
+        1 << (8 - x % 8)
     }
 
     pub fn new(
