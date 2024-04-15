@@ -40,6 +40,7 @@ pub struct P10Led<
     latch: L,
     brightness: u16,
     bitmap: [u8; 256], // TODO: size ???
+    cache: [u8; 64],   // TODO: size ???
     scan_row: u8,
     _mode: PhantomData<MODE>,
 }
@@ -90,6 +91,70 @@ impl<
             .set_duty_cycle_fraction(brightness, 65535)
             .map_err(|_| Error::Pwm)
     }
+
+    fn fill_cache(&mut self) {
+        let rowsize = Self::unified_width_bytes();
+        let scan_row = self.scan_row as usize;
+        {
+            for (chunk, (((&r0, &r4), &r8), &r12)) in self.cache.chunks_exact_mut(4).zip(
+                self.bitmap
+                    .iter()
+                    .skip((scan_row + 0) * rowsize)
+                    .take(rowsize)
+                    .zip(
+                        self.bitmap
+                            .iter()
+                            .skip((scan_row + 4) * rowsize)
+                            .take(rowsize),
+                    )
+                    .zip(
+                        self.bitmap
+                            .iter()
+                            .skip((scan_row + 8) * rowsize)
+                            .take(rowsize),
+                    )
+                    .zip(
+                        self.bitmap
+                            .iter()
+                            .skip((scan_row + 12) * rowsize)
+                            .take(rowsize),
+                    ),
+            ) {
+                chunk.copy_from_slice(&[r0, r4, r8, r12]);
+            }
+        }
+    }
+
+    fn next_row(&mut self) -> Result<(), Error> {
+        // Disable PWM
+        self.pwm
+            .set_duty_cycle_fully_off()
+            .map_err(|_| Error::Pwm)?;
+        // Latch
+        self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
+        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
+
+        // Digital outputs A, B are a 2-bit selector output, set from the scan_row variable (loops over 0-3),
+        // that determines which set of interleaved rows we are outputting during this pass.
+        // BA 0 (00) = 1,5,9,13
+        // BA 1 (01) = 2,6,10,14
+        // BA 2 (10) = 3,7,11,15
+        // BA 3 (11) = 4,8,12,16
+        self.pin_a
+            .set_state(PinState::from(self.scan_row & 0b01 != 0))
+            .map_err(|_| Error::Digital)?;
+        self.pin_b
+            .set_state(PinState::from(self.scan_row & 0b10 != 0))
+            .map_err(|_| Error::Digital)?;
+        self.scan_row = (self.scan_row + 1) % 4;
+
+        // Reenable PWM
+        self.pwm
+            .set_duty_cycle_fraction(self.brightness, 65535)
+            .map_err(|_| Error::Pwm)?;
+
+        Ok(())
+    }
 }
 
 impl<
@@ -120,6 +185,7 @@ impl<
             latch,
             brightness,
             bitmap: [0xff; 256],
+            cache: [0xff; 64],
             scan_row: 0,
             _mode: PhantomData,
         })
@@ -135,61 +201,20 @@ impl<
             latch: self.latch,
             brightness: self.brightness,
             bitmap: self.bitmap,
+            cache: self.cache,
             scan_row: self.scan_row,
             _mode: PhantomData,
         }
-    }
-
-    fn scan_display(&mut self) -> Result<(), Error> {
-        let rowsize = Self::unified_width_bytes();
-        let scan_row = self.scan_row as usize;
-        {
-            let r0 = &self.bitmap[(scan_row + 0) * rowsize..];
-            let r4 = &self.bitmap[(scan_row + 4) * rowsize..];
-            let r8 = &self.bitmap[(scan_row + 8) * rowsize..];
-            let r12 = &self.bitmap[(scan_row + 12) * rowsize..];
-            for i in 0..rowsize {
-                self.spi
-                    .write(&[r0[i], r4[i], r8[i], r12[i]])
-                    .map_err(|_| Error::Spi)?;
-            }
-        }
-
-        // Disable PWM
-        self.pwm
-            .set_duty_cycle_fully_off()
-            .map_err(|_| Error::Pwm)?;
-        // Latch
-        self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
-        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
-
-        // Digital outputs A, B are a 2-bit selector output, set from the scan_row variable (loops over 0-3),
-        // that determines which set of interleaved rows we are outputting during this pass.
-        // BA 0 (00) = 1,5,9,13
-        // BA 1 (01) = 2,6,10,14
-        // BA 2 (10) = 3,7,11,15
-        // BA 3 (11) = 4,8,12,16
-        self.pin_a
-            .set_state(PinState::from(scan_row & 0b01 != 0))
-            .map_err(|_| Error::Digital)?;
-        self.pin_b
-            .set_state(PinState::from(scan_row & 0b10 != 0))
-            .map_err(|_| Error::Digital)?;
-        self.scan_row = (self.scan_row + 1) % 4;
-
-        // Reenable PWM
-        self.pwm
-            .set_duty_cycle_fraction(self.brightness, 65535)
-            .map_err(|_| Error::Pwm)?;
-
-        Ok(())
     }
 
     /// Method to flush framebuffer to display. This method needs to be called everytime a new framebuffer is created,
     /// otherwise the frame will not appear on the screen.
     pub fn flush(&mut self) -> Result<(), Error> {
         for _ in 0..4 {
-            self.scan_display()?;
+            self.fill_cache();
+            self.spi.write(&self.cache).map_err(|_| Error::Spi)?;
+
+            self.next_row()?;
         }
         Ok(())
     }
@@ -206,29 +231,6 @@ impl<
         const PY: usize,
     > P10Led<SPI, PWM, A, B, L, PX, PY, Async>
 {
-    pub fn new(
-        spi: SPI,
-        mut pwm: PWM,
-        pin_a: A,
-        pin_b: B,
-        latch: L,
-        brightness: u16,
-    ) -> Result<Self, Error> {
-        pwm.set_duty_cycle_fraction(brightness, 65535)
-            .map_err(|_| Error::Pwm)?;
-        Ok(Self {
-            spi,
-            pwm,
-            pin_a,
-            pin_b,
-            latch,
-            brightness,
-            bitmap: [0xff; 256],
-            scan_row: 0,
-            _mode: PhantomData,
-        })
-    }
-
     pub fn blocking(self) -> P10Led<SPI, PWM, A, B, L, PX, PY, Blocking> {
         P10Led {
             spi: self.spi,
@@ -238,62 +240,20 @@ impl<
             latch: self.latch,
             brightness: self.brightness,
             bitmap: self.bitmap,
+            cache: self.cache,
             scan_row: self.scan_row,
             _mode: PhantomData,
         }
-    }
-
-    async fn scan_display(&mut self) -> Result<(), Error> {
-        let rowsize = Self::unified_width_bytes();
-        let scan_row = self.scan_row as usize;
-        {
-            let r0 = &self.bitmap[(scan_row + 0) * rowsize..];
-            let r4 = &self.bitmap[(scan_row + 4) * rowsize..];
-            let r8 = &self.bitmap[(scan_row + 8) * rowsize..];
-            let r12 = &self.bitmap[(scan_row + 12) * rowsize..];
-            for i in 0..rowsize {
-                self.spi
-                    .write(&[r0[i], r4[i], r8[i], r12[i]])
-                    .await
-                    .map_err(|_| Error::Spi)?;
-            }
-        }
-
-        // Disable PWM
-        self.pwm
-            .set_duty_cycle_fully_off()
-            .map_err(|_| Error::Pwm)?;
-        // Latch
-        self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
-        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
-
-        // Digital outputs A, B are a 2-bit selector output, set from the scan_row variable (loops over 0-3),
-        // that determines which set of interleaved rows we are outputting during this pass.
-        // BA 0 (00) = 1,5,9,13
-        // BA 1 (01) = 2,6,10,14
-        // BA 2 (10) = 3,7,11,15
-        // BA 3 (11) = 4,8,12,16
-        self.pin_a
-            .set_state(PinState::from(scan_row & 0b01 != 0))
-            .map_err(|_| Error::Digital)?;
-        self.pin_b
-            .set_state(PinState::from(scan_row & 0b10 != 0))
-            .map_err(|_| Error::Digital)?;
-        self.scan_row = (self.scan_row + 1) % 4;
-
-        // Reenable PWM
-        self.pwm
-            .set_duty_cycle_fraction(self.brightness, 65535)
-            .map_err(|_| Error::Pwm)?;
-
-        Ok(())
     }
 
     /// Method to flush framebuffer to display. This method needs to be called everytime a new framebuffer is created,
     /// otherwise the frame will not appear on the screen.
     pub async fn flush(&mut self) -> Result<(), Error> {
         for _ in 0..4 {
-            self.scan_display().await?;
+            self.fill_cache();
+            self.spi.write(&self.cache).await.map_err(|_| Error::Spi)?;
+
+            self.next_row()?;
         }
         Ok(())
     }
