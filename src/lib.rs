@@ -30,7 +30,7 @@ pub struct P10Led<
     pin_b: B,
     latch: L,
     brightness: u16,
-    bitmap: [u8; 2048], // TODO: size ???
+    bitmap: [u8; 256], // TODO: size ???
     scan_row: u8,
 }
 impl<
@@ -49,14 +49,23 @@ impl<
     pub const HEIGHT: usize = PY * Self::PANEL_HEIGHT;
     pub const HEIGHT_IN_PANELS: usize = PY;
 
-    pub const UNIFIED_WIDTH_BYTES: usize = Self::WIDTH * Self::HEIGHT_IN_PANELS;
+    pub const fn row_width_bytes() -> usize {
+        if Self::WIDTH % 8 == 0 {
+            Self::WIDTH / 8
+        } else {
+            Self::WIDTH / 8 + 1
+        }
+    }
+    pub const fn unified_width_bytes() -> usize {
+        Self::row_width_bytes() * Self::HEIGHT_IN_PANELS
+    }
 
     const fn pixel_to_bitmap_index(x: usize, y: usize) -> usize {
         let panel = (x / Self::PANEL_WIDTH)
             + ((Self::WIDTH / Self::PANEL_WIDTH) * (y / Self::PANEL_HEIGHT));
         let x = (x % Self::PANEL_WIDTH) + (panel * Self::PANEL_WIDTH);
         let y = y % Self::PANEL_HEIGHT;
-        x / 8 + y * Self::UNIFIED_WIDTH_BYTES
+        x / 8 + y * Self::unified_width_bytes()
     }
 
     const fn pixel_to_bitmask(x: usize) -> u8 {
@@ -80,13 +89,13 @@ impl<
             pin_b,
             latch,
             brightness,
-            bitmap: [0xff; 2048],
+            bitmap: [0xff; 256],
             scan_row: 0,
         })
     }
 
     fn scan_display(&mut self) -> Result<(), Error> {
-        let rowsize = Self::UNIFIED_WIDTH_BYTES;
+        let rowsize = Self::unified_width_bytes();
         let scan_row = self.scan_row as usize;
         {
             let r0 = &self.bitmap[(scan_row + 0) * rowsize..];
