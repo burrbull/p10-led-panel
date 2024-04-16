@@ -9,7 +9,7 @@ use embedded_graphics_core::{
 use embedded_hal::{
     digital::{OutputPin, PinState},
     pwm::SetDutyCycle,
-    spi::SpiDevice,
+    spi::SpiBus,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -158,7 +158,7 @@ impl<
 }
 
 impl<
-        SPI: SpiDevice,
+        SPI: SpiBus,
         PWM: SetDutyCycle,
         A: OutputPin,
         B: OutputPin,
