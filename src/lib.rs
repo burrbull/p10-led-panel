@@ -82,7 +82,7 @@ impl<
     }
 
     const fn pixel_to_bitmask(x: usize) -> u8 {
-        1 << (8 - x % 8)
+        1 << (7 - x % 8)
     }
 
     pub fn set_brightness(&mut self, brightness: u16) -> Result<(), Error> {
@@ -120,7 +120,7 @@ impl<
                             .take(rowsize),
                     ),
             ) {
-                chunk.copy_from_slice(&[r0, r4, r8, r12]);
+                chunk.copy_from_slice(&[r12, r8, r4, r0]);
             }
         }
     }
