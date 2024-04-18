@@ -8,7 +8,6 @@ use embedded_graphics_core::{
 };
 use embedded_hal::{
     digital::{OutputPin, PinState},
-    pwm::SetDutyCycle,
     spi::SpiBus,
 };
 
@@ -25,7 +24,7 @@ pub struct Async;
 
 pub struct P10Led<
     SPI,
-    PWM: SetDutyCycle,
+    E: OutputPin,
     A: OutputPin,
     B: OutputPin,
     L: OutputPin,
@@ -34,11 +33,10 @@ pub struct P10Led<
     MODE = Blocking,
 > {
     spi: SPI,
-    pwm: PWM,
+    enable: E,
     pin_a: A,
     pin_b: B,
     latch: L,
-    brightness: u16,
     bitmap: [u8; 256], // TODO: size ???
     cache: [u8; 64],   // TODO: size ???
     scan_row: u8,
@@ -47,14 +45,14 @@ pub struct P10Led<
 
 impl<
         SPI,
-        PWM: SetDutyCycle,
+        E: OutputPin,
         A: OutputPin,
         B: OutputPin,
         L: OutputPin,
         const PX: usize,
         const PY: usize,
         MODE,
-    > P10Led<SPI, PWM, A, B, L, PX, PY, MODE>
+    > P10Led<SPI, E, A, B, L, PX, PY, MODE>
 {
     pub const PANEL_WIDTH: usize = 32;
     pub const PANEL_HEIGHT: usize = 16;
@@ -83,13 +81,6 @@ impl<
 
     const fn pixel_to_bitmask(x: usize) -> u8 {
         1 << (7 - x % 8)
-    }
-
-    pub fn set_brightness(&mut self, brightness: u16) -> Result<(), Error> {
-        self.brightness = brightness;
-        self.pwm
-            .set_duty_cycle_fraction(brightness, 65535)
-            .map_err(|_| Error::Pwm)
     }
 
     fn fill_cache(&mut self) {
@@ -124,15 +115,13 @@ impl<
             }
         }
     }
+    
 
     fn next_row(&mut self) -> Result<(), Error> {
         // Disable PWM
-        self.pwm
-            .set_duty_cycle_fully_off()
-            .map_err(|_| Error::Pwm)?;
+        self.enable.set_low().map_err(|_| Error::Digital)?;
         // Latch
         self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
-        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
 
         // Digital outputs A, B are a 2-bit selector output, set from the scan_row variable (loops over 0-3),
         // that determines which set of interleaved rows we are outputting during this pass.
@@ -147,11 +136,9 @@ impl<
             .set_state(PinState::from(self.scan_row & 0b10 != 0))
             .map_err(|_| Error::Digital)?;
         self.scan_row = (self.scan_row + 1) % 4;
+        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
 
-        // Reenable PWM
-        self.pwm
-            .set_duty_cycle_fraction(self.brightness, 65535)
-            .map_err(|_| Error::Pwm)?;
+        self.enable.set_high().map_err(|_| Error::Digital)?;
 
         Ok(())
     }
@@ -159,31 +146,27 @@ impl<
 
 impl<
         SPI: SpiBus,
-        PWM: SetDutyCycle,
+        E: OutputPin,
         A: OutputPin,
         B: OutputPin,
         L: OutputPin,
         const PX: usize,
         const PY: usize,
-    > P10Led<SPI, PWM, A, B, L, PX, PY, Blocking>
+    > P10Led<SPI, E, A, B, L, PX, PY, Blocking>
 {
     pub fn new(
         spi: SPI,
-        mut pwm: PWM,
+        enable: E,
         pin_a: A,
         pin_b: B,
         latch: L,
-        brightness: u16,
     ) -> Result<Self, Error> {
-        pwm.set_duty_cycle_fraction(brightness, 65535)
-            .map_err(|_| Error::Pwm)?;
         Ok(Self {
             spi,
-            pwm,
+            enable,
             pin_a,
             pin_b,
             latch,
-            brightness,
             bitmap: [0xff; 256],
             cache: [0xff; 64],
             scan_row: 0,
@@ -216,6 +199,16 @@ impl<
 
             self.next_row()?;
         }
+        self.fill_cache();
+        self.spi.write(&self.cache).map_err(|_| Error::Spi)?;
+
+        self.enable.set_low().map_err(|_| Error::Digital)?;
+        for c in &mut self.cache {
+            *c = 0xff;
+        }
+        self.spi.write(&self.cache).map_err(|_| Error::Spi)?;
+        self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
+        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
         Ok(())
     }
 }
@@ -261,14 +254,14 @@ impl<
 
 impl<
         SPI,
-        PWM: SetDutyCycle,
+        E: OutputPin,
         A: OutputPin,
         B: OutputPin,
         L: OutputPin,
         const PX: usize,
         const PY: usize,
         MODE,
-    > embedded_graphics_core::draw_target::DrawTarget for P10Led<SPI, PWM, A, B, L, PX, PY, MODE>
+    > embedded_graphics_core::draw_target::DrawTarget for P10Led<SPI, E, A, B, L, PX, PY, MODE>
 {
     type Color = embedded_graphics_core::pixelcolor::BinaryColor;
     type Error = core::convert::Infallible;
@@ -295,7 +288,7 @@ impl<
 }
 impl<
         SPI,
-        PWM: SetDutyCycle,
+        E: OutputPin,
         A: OutputPin,
         B: OutputPin,
         L: OutputPin,
@@ -303,7 +296,7 @@ impl<
         const PY: usize,
         MODE,
     > embedded_graphics_core::geometry::OriginDimensions
-    for P10Led<SPI, PWM, A, B, L, PX, PY, MODE>
+    for P10Led<SPI, E, A, B, L, PX, PY, MODE>
 {
     fn size(&self) -> Size {
         Size::new(Self::WIDTH as _, Self::HEIGHT as _)
