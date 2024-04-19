@@ -115,7 +115,6 @@ impl<
             }
         }
     }
-    
 
     fn next_row(&mut self) -> Result<(), Error> {
         // Disable PWM
@@ -154,13 +153,7 @@ impl<
         const PY: usize,
     > P10Led<SPI, E, A, B, L, PX, PY, Blocking>
 {
-    pub fn new(
-        spi: SPI,
-        enable: E,
-        pin_a: A,
-        pin_b: B,
-        latch: L,
-    ) -> Result<Self, Error> {
+    pub fn new(spi: SPI, enable: E, pin_a: A, pin_b: B, latch: L) -> Result<Self, Error> {
         Ok(Self {
             spi,
             enable,
@@ -175,14 +168,13 @@ impl<
     }
 
     #[cfg(feature = "async")]
-    pub fn asynch(self) -> P10Led<SPI, PWM, A, B, L, PX, PY, Async> {
+    pub fn asynch(self) -> P10Led<SPI, E, A, B, L, PX, PY, Async> {
         P10Led {
             spi: self.spi,
-            pwm: self.pwm,
+            enable: self.enable,
             pin_a: self.pin_a,
             pin_b: self.pin_b,
             latch: self.latch,
-            brightness: self.brightness,
             bitmap: self.bitmap,
             cache: self.cache,
             scan_row: self.scan_row,
@@ -190,23 +182,27 @@ impl<
         }
     }
 
+    fn send_cache(&mut self) -> Result<(), Error> {
+        self.spi.write(&self.cache).map_err(|_| Error::Spi)
+    }
+
     /// Method to flush framebuffer to display. This method needs to be called everytime a new framebuffer is created,
     /// otherwise the frame will not appear on the screen.
     pub fn flush(&mut self) -> Result<(), Error> {
         for _ in 0..4 {
             self.fill_cache();
-            self.spi.write(&self.cache).map_err(|_| Error::Spi)?;
+            self.send_cache()?;
 
             self.next_row()?;
         }
         self.fill_cache();
-        self.spi.write(&self.cache).map_err(|_| Error::Spi)?;
+        self.send_cache()?;
 
         self.enable.set_low().map_err(|_| Error::Digital)?;
         for c in &mut self.cache {
             *c = 0xff;
         }
-        self.spi.write(&self.cache).map_err(|_| Error::Spi)?;
+        self.send_cache()?;
         self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
         self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
         Ok(())
@@ -216,22 +212,21 @@ impl<
 #[cfg(feature = "async")]
 impl<
         SPI: embedded_hal_async::spi::SpiDevice,
-        PWM: SetDutyCycle,
+        E: OutputPin,
         A: OutputPin,
         B: OutputPin,
         L: OutputPin,
         const PX: usize,
         const PY: usize,
-    > P10Led<SPI, PWM, A, B, L, PX, PY, Async>
+    > P10Led<SPI, E, A, B, L, PX, PY, Async>
 {
-    pub fn blocking(self) -> P10Led<SPI, PWM, A, B, L, PX, PY, Blocking> {
+    pub fn blocking(self) -> P10Led<SPI, E, A, B, L, PX, PY, Blocking> {
         P10Led {
             spi: self.spi,
-            pwm: self.pwm,
+            enable: self.enable,
             pin_a: self.pin_a,
             pin_b: self.pin_b,
             latch: self.latch,
-            brightness: self.brightness,
             bitmap: self.bitmap,
             cache: self.cache,
             scan_row: self.scan_row,
@@ -239,15 +234,29 @@ impl<
         }
     }
 
+    async fn send_cache(&mut self) -> Result<(), Error> {
+        self.spi.write(&self.cache).await.map_err(|_| Error::Spi)
+    }
+
     /// Method to flush framebuffer to display. This method needs to be called everytime a new framebuffer is created,
     /// otherwise the frame will not appear on the screen.
     pub async fn flush(&mut self) -> Result<(), Error> {
         for _ in 0..4 {
             self.fill_cache();
-            self.spi.write(&self.cache).await.map_err(|_| Error::Spi)?;
+            self.send_cache().await?;
 
             self.next_row()?;
         }
+        self.fill_cache();
+        self.send_cache().await?;
+
+        self.enable.set_low().map_err(|_| Error::Digital)?;
+        for c in &mut self.cache {
+            *c = 0xff;
+        }
+        self.send_cache().await?;
+        self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
+        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
         Ok(())
     }
 }
@@ -295,8 +304,7 @@ impl<
         const PX: usize,
         const PY: usize,
         MODE,
-    > embedded_graphics_core::geometry::OriginDimensions
-    for P10Led<SPI, E, A, B, L, PX, PY, MODE>
+    > embedded_graphics_core::geometry::OriginDimensions for P10Led<SPI, E, A, B, L, PX, PY, MODE>
 {
     fn size(&self) -> Size {
         Size::new(Self::WIDTH as _, Self::HEIGHT as _)
