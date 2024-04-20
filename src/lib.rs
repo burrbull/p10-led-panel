@@ -39,7 +39,6 @@ pub struct P10Led<
     latch: L,
     bitmap: [u8; 256], // TODO: size ???
     cache: [u8; 64],   // TODO: size ???
-    scan_row: u8,
     _mode: PhantomData<MODE>,
 }
 
@@ -83,9 +82,9 @@ impl<
         1 << (7 - x % 8)
     }
 
-    fn fill_cache(&mut self) {
+    fn fill_cache(&mut self, scan_row: u8) {
         let rowsize = Self::unified_width_bytes();
-        let scan_row = self.scan_row as usize;
+        let scan_row = scan_row as usize;
         {
             for (chunk, (((&r0, &r4), &r8), &r12)) in self.cache.chunks_exact_mut(4).zip(
                 self.bitmap
@@ -116,9 +115,7 @@ impl<
         }
     }
 
-    fn next_row(&mut self) -> Result<(), Error> {
-        // Disable PWM
-        self.enable.set_low().map_err(|_| Error::Digital)?;
+    fn next_row(&mut self, scan_row: u8) -> Result<(), Error> {
         // Latch
         self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
 
@@ -129,15 +126,12 @@ impl<
         // BA 2 (10) = 3,7,11,15
         // BA 3 (11) = 4,8,12,16
         self.pin_a
-            .set_state(PinState::from(self.scan_row & 0b01 != 0))
+            .set_state(PinState::from(scan_row & 0b01 != 0))
             .map_err(|_| Error::Digital)?;
         self.pin_b
-            .set_state(PinState::from(self.scan_row & 0b10 != 0))
+            .set_state(PinState::from(scan_row & 0b10 != 0))
             .map_err(|_| Error::Digital)?;
-        self.scan_row = (self.scan_row + 1) % 4;
         self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
-
-        self.enable.set_high().map_err(|_| Error::Digital)?;
 
         Ok(())
     }
@@ -162,7 +156,6 @@ impl<
             latch,
             bitmap: [0xff; 256],
             cache: [0xff; 64],
-            scan_row: 0,
             _mode: PhantomData,
         })
     }
@@ -177,7 +170,6 @@ impl<
             latch: self.latch,
             bitmap: self.bitmap,
             cache: self.cache,
-            scan_row: self.scan_row,
             _mode: PhantomData,
         }
     }
@@ -189,22 +181,14 @@ impl<
     /// Method to flush framebuffer to display. This method needs to be called everytime a new framebuffer is created,
     /// otherwise the frame will not appear on the screen.
     pub fn update(&mut self) -> Result<(), Error> {
-        for _ in 0..4 {
-            self.fill_cache();
+        for scan_row in 0..4 {
+            self.next_row(scan_row)?;
+            self.enable.set_high().map_err(|_| Error::Digital)?;
+            self.fill_cache(scan_row);
             self.send_cache()?;
-
-            self.next_row()?;
+            // Disable PWM
+            self.enable.set_low().map_err(|_| Error::Digital)?;
         }
-        self.fill_cache();
-        self.send_cache()?;
-
-        self.enable.set_low().map_err(|_| Error::Digital)?;
-        for c in &mut self.cache {
-            *c = 0xff;
-        }
-        self.send_cache()?;
-        self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
-        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
         Ok(())
     }
 }
@@ -229,7 +213,6 @@ impl<
             latch: self.latch,
             bitmap: self.bitmap,
             cache: self.cache,
-            scan_row: self.scan_row,
             _mode: PhantomData,
         }
     }
@@ -241,22 +224,14 @@ impl<
     /// Method to flush framebuffer to display. This method needs to be called everytime a new framebuffer is created,
     /// otherwise the frame will not appear on the screen.
     pub async fn update(&mut self) -> Result<(), Error> {
-        for _ in 0..4 {
-            self.fill_cache();
+        for scan_row in 0..4 {
+            self.next_row(scan_row)?;
+            self.enable.set_high().map_err(|_| Error::Digital)?;
+            self.fill_cache(scan_row);
             self.send_cache().await?;
-
-            self.next_row()?;
+            // Disable PWM
+            self.enable.set_low().map_err(|_| Error::Digital)?;
         }
-        self.fill_cache();
-        self.send_cache().await?;
-
-        self.enable.set_low().map_err(|_| Error::Digital)?;
-        for c in &mut self.cache {
-            *c = 0xff;
-        }
-        self.send_cache().await?;
-        self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
-        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
         Ok(())
     }
 }
