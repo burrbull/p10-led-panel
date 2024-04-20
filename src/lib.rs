@@ -188,7 +188,7 @@ impl<
 
     /// Method to flush framebuffer to display. This method needs to be called everytime a new framebuffer is created,
     /// otherwise the frame will not appear on the screen.
-    pub fn flush(&mut self) -> Result<(), Error> {
+    pub fn update(&mut self) -> Result<(), Error> {
         for _ in 0..4 {
             self.fill_cache();
             self.send_cache()?;
@@ -240,7 +240,7 @@ impl<
 
     /// Method to flush framebuffer to display. This method needs to be called everytime a new framebuffer is created,
     /// otherwise the frame will not appear on the screen.
-    pub async fn flush(&mut self) -> Result<(), Error> {
+    pub async fn update(&mut self) -> Result<(), Error> {
         for _ in 0..4 {
             self.fill_cache();
             self.send_cache().await?;
