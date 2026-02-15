@@ -18,6 +18,11 @@ pub enum Error {
     Digital,
 }
 
+#[inline(always)]
+fn digital<R, E>(r: Result<R, E>) -> Result<R, Error> {
+    r.map_err(|_| Error::Digital)
+}
+
 pub struct Blocking;
 #[cfg(feature = "async")]
 pub struct Async;
@@ -118,9 +123,9 @@ impl<
 
     fn next_row(&mut self) -> Result<(), Error> {
         // Disable PWM
-        self.enable.set_low().map_err(|_| Error::Digital)?;
+        digital(self.enable.set_low())?;
         // Latch
-        self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
+        digital(self.latch.set_high())?; // Latch DMD shift register output
 
         // Digital outputs A, B are a 2-bit selector output, set from the scan_row variable (loops over 0-3),
         // that determines which set of interleaved rows we are outputting during this pass.
@@ -128,18 +133,37 @@ impl<
         // BA 1 (01) = 2,6,10,14
         // BA 2 (10) = 3,7,11,15
         // BA 3 (11) = 4,8,12,16
-        self.pin_a
-            .set_state(PinState::from(self.scan_row & 0b01 != 0))
-            .map_err(|_| Error::Digital)?;
-        self.pin_b
-            .set_state(PinState::from(self.scan_row & 0b10 != 0))
-            .map_err(|_| Error::Digital)?;
+        digital(
+            self.pin_a
+                .set_state(PinState::from(self.scan_row & 0b01 != 0)),
+        )?;
+        digital(
+            self.pin_b
+                .set_state(PinState::from(self.scan_row & 0b10 != 0)),
+        )?;
         self.scan_row = (self.scan_row + 1) % 4;
-        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
+        digital(self.latch.set_low())?; // (Deliberately left as digitalWrite to ensure decent latching time)
 
-        self.enable.set_high().map_err(|_| Error::Digital)?;
+        digital(self.enable.set_high())?;
 
         Ok(())
+    }
+}
+
+pub struct P10<SPI, E: OutputPin, A: OutputPin, B: OutputPin, L: OutputPin>(
+    PhantomData<(SPI, E, A, B, L)>,
+);
+
+impl<SPI: SpiBus, E: OutputPin, A: OutputPin, B: OutputPin, L: OutputPin> P10<SPI, E, A, B, L> {
+    #[inline(always)]
+    pub fn new<const PXX: usize, const PYX: usize>(
+        spi: SPI,
+        enable: E,
+        pin_a: A,
+        pin_b: B,
+        latch: L,
+    ) -> Result<P10Led<SPI, E, A, B, L, PXX, PYX, Blocking>, Error> {
+        P10Led::new(spi, enable, pin_a, pin_b, latch)
     }
 }
 
@@ -198,13 +222,13 @@ impl<
         self.fill_cache();
         self.send_cache()?;
 
-        self.enable.set_low().map_err(|_| Error::Digital)?;
+        digital(self.enable.set_low())?;
         for c in &mut self.cache {
             *c = 0xff;
         }
         self.send_cache()?;
-        self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
-        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
+        digital(self.latch.set_high())?; // Latch DMD shift register output
+        digital(self.latch.set_low())?; // (Deliberately left as digitalWrite to ensure decent latching time)
         Ok(())
     }
 }
@@ -250,13 +274,13 @@ impl<
         self.fill_cache();
         self.send_cache().await?;
 
-        self.enable.set_low().map_err(|_| Error::Digital)?;
+        digital(self.enable.set_low())?;
         for c in &mut self.cache {
             *c = 0xff;
         }
         self.send_cache().await?;
-        self.latch.set_high().map_err(|_| Error::Digital)?; // Latch DMD shift register output
-        self.latch.set_low().map_err(|_| Error::Digital)?; // (Deliberately left as digitalWrite to ensure decent latching time)
+        digital(self.latch.set_high())?; // Latch DMD shift register output
+        digital(self.latch.set_low())?; // (Deliberately left as digitalWrite to ensure decent latching time)
         Ok(())
     }
 }
