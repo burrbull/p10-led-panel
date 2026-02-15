@@ -213,9 +213,7 @@ impl<
         self.send_cache()?;
 
         digital(self.enable.set_low())?;
-        for c in &mut self.cache {
-            *c = 0xff;
-        }
+        self.cache.fill(0xff);
         self.send_cache()?;
         digital(self.latch.set_high())?; // Latch DMD shift register output
         digital(self.latch.set_low())?; // (Deliberately left as digitalWrite to ensure decent latching time)
@@ -264,9 +262,7 @@ impl<
         self.send_cache().await?;
 
         digital(self.enable.set_low())?;
-        for c in &mut self.cache {
-            *c = 0xff;
-        }
+        self.cache.fill(0xff);
         self.send_cache().await?;
         digital(self.latch.set_high())?; // Latch DMD shift register output
         digital(self.latch.set_low())?; // (Deliberately left as digitalWrite to ensure decent latching time)
